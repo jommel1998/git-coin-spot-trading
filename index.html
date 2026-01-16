@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>GitCoin | Spot Terminal</title>
+    <style>
+        :root { --bg: #0d1117; --card: #161b22; --green: #2ea043; --red: #f85149; --text: #c9d1d9; --border: #30363d; --yellow: #f0b90b; }
+        * { box-sizing: border-box; }
+        body { background: var(--bg); color: var(--text); font-family: monospace; margin: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+        header { padding: 10px 15px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; height: 60px; flex-shrink: 0; }
+        .header-right { display: flex; align-items: center; gap: 10px; }
+        main { display: flex; flex: 1; overflow: hidden; }
+        #chart-container { flex: 1; position: relative; background: #080a0d; border-right: 1px solid var(--border); }
+        canvas { width: 100%; height: 100%; display: block; }
+        #sidebar { width: 320px; background: var(--card); padding: 20px; display: flex; flex-direction: column; gap: 15px; overflow-y: auto; }
+        .price { font-size: 1.8rem; font-weight: bold; margin-bottom: 5px; }
+        .btn { padding: 15px; border: none; border-radius: 6px; color: white; font-weight: bold; cursor: pointer; font-size: 1rem; width: 100%; }
+        .btn-buy { background: var(--green); }
+        .btn-sell { background: var(--red); display: none; }
+        .help-btn { background: #21262d; color: var(--text); border: 1px solid var(--border); border-radius: 50%; width: 28px; height: 28px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-weight: bold; }
+        input { background: var(--bg); border: 1px solid var(--border); color: white; padding: 12px; border-radius: 6px; width: 100%; font-family: monospace; }
+        #pnl-display { font-size: 1.2rem; font-weight: bold; padding: 10px; border-radius: 4px; text-align: center; display: none; background: #21262d; margin-bottom: 10px; }
+        #log { font-size: 0.75rem; color: #8b949e; border-top: 1px solid var(--border); padding-top: 10px; flex: 1; overflow-y: auto; line-height: 1.4; }
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); overflow-y: auto; }
+        .modal-content { background: var(--card); margin: 5% auto; padding: 30px; border: 1px solid var(--border); width: 90%; max-width: 600px; border-radius: 8px; line-height: 1.6; }
+        .close-modal { float: right; cursor: pointer; font-size: 24px; color: #8b949e; }
+        @media (max-width: 850px) { main { flex-direction: column; } #sidebar { width: 100%; height: 50%; border-left: none; border-top: 1px solid var(--border); } #chart-container { height: 50%; flex: none; } }
+    </style>
+</head>
+<body>
+
+<div id="helpModal" class="modal">
+    <div class="modal-content">
+        <span class="close-modal" onclick="closeHelp()">&times;</span>
+        <h2 style="color: var(--yellow); margin-top: 0;">Spot Trading Mechanics</h2>
+        <p><strong>1. Direct Ownership:</strong> BUY "coins" at the current price and hold them.</p>
+        <p><strong>2. No Timer:</strong> You hold as long as you want. There is no automatic expiration.</p>
+        <p><strong>3. Live PnL:</strong> See your profit or loss change live with every price wiggle.</p>
+        <p><strong>4. Manual Exit:</strong> Click SELL when you are happy with the profit.</p>
+        <button class="btn btn-buy" style="margin-top: 20px;" onclick="closeHelp()">UNDERSTOOD</button>
+    </div>
+</div>
+
+<header>
+    <div style="font-weight: bold;">git-coin-spot-trading</div>
+    <div class="header-right">
+        <div id="balance-display" style="background: #21262d; padding: 6px 10px; border-radius: 4px;">Wallet: $1,000.00</div>
+        <button class="help-btn" onclick="openHelp()">?</button>
+    </div>
+</header>
+
+<main>
+    <div id="chart-container">
+        <div style="position:absolute; top:15px; left:15px; pointer-events:none; z-index: 5;">
+            <div style="font-size: 0.7rem; opacity: 0.6;">BTC / USDT • SPOT MODE</div>
+            <div id="current-price" class="price" style="color:#2ea043">45000.00</div>
+        </div>
+        <canvas id="tradingCanvas"></canvas>
+    </div>
+
+    <aside id="sidebar">
+        <div id="pnl-display">PnL: $0.00</div>
+        <div id="controls">
+            <label style="font-size: 0.7rem; color: #8b949e;">INVEST AMOUNT (USD)</label>
+            <input type="number" id="bet" value="100" style="margin-top: 5px; margin-bottom: 10px;">
+            <button id="buy-btn" class="btn btn-buy" onclick="buySpot()">BUY</button>
+            <button id="sell-btn" class="btn btn-sell" onclick="sellSpot()">SELL</button>
+        </div>
+        <div id="log">> Ready for Spot Trading...</div>
+    </aside>
+</main>
+
+<script>
+    const canvas = document.getElementById('tradingCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // Hex colors for Canvas (Since Canvas doesn't read CSS variables well)
+    const COLOR_GREEN = "#2ea043";
+    const COLOR_RED = "#f85149";
+    const COLOR_YELLOW = "#f0b90b";
+    const COLOR_GRID = "#161b22";
+    const COLOR_TEXT = "#484f58";
+
+    let candles = [];
+    let balance = 1000;
+    let lastClose = 45000;
+    let activePosition = null;
+
+    function openHelp() { document.getElementById('helpModal').style.display = "block"; }
+    function closeHelp() { document.getElementById('helpModal').style.display = "none"; }
+
+    for(let i=0; i<60; i++) { createNewCandle(); }
+
+    function createNewCandle() {
+        const open = lastClose;
+        const close = open + (Math.random() - 0.5) * 80;
+        candles.push({ open, high: Math.max(open, close) + 10, low: Math.min(open, close) - 10, close });
+        lastClose = close;
+        if(candles.length > 50) candles.shift();
+    }
+
+    function buySpot() {
+        const amt = Number(document.getElementById('bet').value);
+        if (amt > balance || amt <= 0) return alert("Invalid Amount");
+        balance -= amt;
+        activePosition = { entry: lastClose, amount: amt };
+        document.getElementById('buy-btn').style.display = 'none';
+        document.getElementById('sell-btn').style.display = 'block';
+        document.getElementById('pnl-display').style.display = 'block';
+        updateUI();
+        addLog(`BOUGHT at ${activePosition.entry.toFixed(2)}`, "#c9d1d9");
+    }
+
+    function sellSpot() {
+        const currentPrice = candles[candles.length - 1].close;
+        const finalValue = (currentPrice / activePosition.entry) * activePosition.amount;
+        balance += finalValue;
+        const net = finalValue - activePosition.amount;
+        addLog(`SOLD! Net: ${net >= 0 ? '+' : ''}${net.toFixed(2)}`, net >= 0 ? COLOR_GREEN : COLOR_RED);
+        activePosition = null;
+        document.getElementById('buy-btn').style.display = 'block';
+        document.getElementById('sell-btn').style.display = 'none';
+        document.getElementById('pnl-display').style.display = 'none';
+        updateUI();
+    }
+
+    function updateUI() {
+        document.getElementById('balance-display').innerText = `Wallet: $${balance.toFixed(2)}`;
+    }
+
+    function addLog(msg, color) {
+        const div = document.createElement('div');
+        div.style.color = color; div.innerText = `> ${msg}`; 
+        document.getElementById('log').prepend(div);
+    }
+
+    setInterval(() => {
+        const c = candles[candles.length - 1];
+        const oldPrice = c.close;
+        c.close += (Math.random() - 0.5) * 15;
+        c.high = Math.max(c.high, c.close);
+        c.low = Math.min(c.low, c.close);
+        
+        const priceEl = document.getElementById('current-price');
+        priceEl.innerText = c.close.toFixed(2);
+        priceEl.style.color = c.close >= oldPrice ? COLOR_GREEN : COLOR_RED;
+        
+        if (activePosition) {
+            const pnl = ((c.close / activePosition.entry) * activePosition.amount) - activePosition.amount;
+            const pnlEl = document.getElementById('pnl-display');
+            pnlEl.innerText = `Live PnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`;
+            pnlEl.style.color = pnl >= 0 ? COLOR_GREEN : COLOR_RED;
+        }
+        if (Math.random() > 0.9) createNewCandle();
+    }, 600);
+
+    function draw() {
+        canvas.width = canvas.offsetWidth; 
+        canvas.height = canvas.offsetHeight;
+        ctx.fillStyle = "#0d1117"; 
+        ctx.fillRect(0,0,canvas.width, canvas.height);
+        
+        const chartWidth = canvas.width - 70;
+        const chartHeight = canvas.height - 100;
+        const candleWidth = chartWidth / candles.length;
+        const all = candles.flatMap(c => [c.high, c.low]);
+        const min = Math.min(...all) * 0.999; 
+        const max = Math.max(...all) * 1.001;
+        const currentPrice = candles[candles.length - 1].close;
+        
+        function getY(p) { return canvas.height - 50 - ((p - min)/(max-min)) * chartHeight; }
+
+        // Grid
+        ctx.strokeStyle = COLOR_GRID;
+        for(let i=0; i<=5; i++) {
+            let p = min + (max-min) * (i/5);
+            let y = getY(p);
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(chartWidth, y); ctx.stroke();
+            ctx.fillStyle = COLOR_TEXT; ctx.font = "10px monospace"; ctx.fillText(p.toFixed(0), chartWidth + 5, y + 4);
+        }
+
+        // Candles
+        candles.forEach((c, i) => {
+            const x = i * candleWidth;
+            const yOpen = getY(c.open);
+            const yClose = getY(c.close);
+            const isUp = c.close >= c.open;
+            
+            ctx.strokeStyle = isUp ? COLOR_GREEN : COLOR_RED;
+            ctx.fillStyle = isUp ? COLOR_GREEN : COLOR_RED;
+            
+            // Wick
+            ctx.beginPath(); 
+            ctx.moveTo(x + candleWidth/2, getY(c.high)); 
+            ctx.lineTo(x + candleWidth/2, getY(c.low)); 
+            ctx.stroke();
+
+            // Body
+            const bodyHeight = Math.max(1, Math.abs(yOpen - yClose));
+            ctx.fillRect(x + 2, Math.min(yOpen, yClose), candleWidth - 4, bodyHeight);
+        });
+
+        // Moving Average
+        ctx.strokeStyle = COLOR_YELLOW;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for(let i = 5; i < candles.length; i++) {
+            let avg = 0;
+            for(let j = 0; j < 5; j++) avg += candles[i-j].close;
+            let x = i * candleWidth + candleWidth/2;
+            if (i === 5) ctx.moveTo(x, getY(avg/5));
+            else ctx.lineTo(x, getY(avg/5));
+        }
+        ctx.stroke();
+        ctx.lineWidth = 1;
+        
+        requestAnimationFrame(draw);
+    }
+    draw();
+</script>
+</body>
+</html>
