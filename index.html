@@ -75,27 +75,38 @@
     const canvas = document.getElementById('tradingCanvas');
     const ctx = canvas.getContext('2d');
     
-    // Hex colors for Canvas (Since Canvas doesn't read CSS variables well)
     const COLOR_GREEN = "#2ea043";
     const COLOR_RED = "#f85149";
     const COLOR_YELLOW = "#f0b90b";
     const COLOR_GRID = "#161b22";
     const COLOR_TEXT = "#484f58";
+    const COLOR_TIME_TEXT = "#8b949e";
 
     let candles = [];
     let balance = 1000;
     let lastClose = 45000;
     let activePosition = null;
+    let currentTime = Date.now() - (60 * 60000); // Start 1 hour ago
 
     function openHelp() { document.getElementById('helpModal').style.display = "block"; }
     function closeHelp() { document.getElementById('helpModal').style.display = "none"; }
 
-    for(let i=0; i<60; i++) { createNewCandle(); }
+    // Initialize with 60 candles
+    for(let i=0; i<60; i++) { 
+        currentTime += 60000; // +1 minute
+        createNewCandle(currentTime); 
+    }
 
-    function createNewCandle() {
+    function createNewCandle(time = Date.now()) {
         const open = lastClose;
         const close = open + (Math.random() - 0.5) * 80;
-        candles.push({ open, high: Math.max(open, close) + 10, low: Math.min(open, close) - 10, close });
+        candles.push({ 
+            open, 
+            high: Math.max(open, close) + 10, 
+            low: Math.min(open, close) - 10, 
+            close,
+            time: time 
+        });
         lastClose = close;
         if(candles.length > 50) candles.shift();
     }
@@ -152,8 +163,17 @@
             pnlEl.innerText = `Live PnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`;
             pnlEl.style.color = pnl >= 0 ? COLOR_GREEN : COLOR_RED;
         }
-        if (Math.random() > 0.9) createNewCandle();
+        if (Math.random() > 0.95) {
+            currentTime += 60000;
+            createNewCandle(currentTime);
+        }
     }, 600);
+
+    function formatTime(ts) {
+        const date = new Date(ts);
+        return date.getHours().toString().padStart(2, '0') + ":" + 
+               date.getMinutes().toString().padStart(2, '0');
+    }
 
     function draw() {
         canvas.width = canvas.offsetWidth; 
@@ -161,26 +181,47 @@
         ctx.fillStyle = "#0d1117"; 
         ctx.fillRect(0,0,canvas.width, canvas.height);
         
-        const chartWidth = canvas.width - 70;
-        const chartHeight = canvas.height - 100;
+        const paddingRight = 70;
+        const paddingBottom = 30; // Space for Time
+        const chartWidth = canvas.width - paddingRight;
+        const chartHeight = canvas.height - paddingBottom - 50;
         const candleWidth = chartWidth / candles.length;
+        
         const all = candles.flatMap(c => [c.high, c.low]);
         const min = Math.min(...all) * 0.999; 
         const max = Math.max(...all) * 1.001;
-        const currentPrice = candles[candles.length - 1].close;
         
-        function getY(p) { return canvas.height - 50 - ((p - min)/(max-min)) * chartHeight; }
+        function getY(p) { return (canvas.height - paddingBottom - 20) - ((p - min)/(max-min)) * chartHeight; }
 
-        // Grid
+        // 1. Grid & Price Labels (Y-Axis)
         ctx.strokeStyle = COLOR_GRID;
+        ctx.lineWidth = 1;
         for(let i=0; i<=5; i++) {
             let p = min + (max-min) * (i/5);
             let y = getY(p);
             ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(chartWidth, y); ctx.stroke();
-            ctx.fillStyle = COLOR_TEXT; ctx.font = "10px monospace"; ctx.fillText(p.toFixed(0), chartWidth + 5, y + 4);
+            ctx.fillStyle = COLOR_TEXT; ctx.font = "10px monospace"; 
+            ctx.fillText(p.toFixed(0), chartWidth + 8, y + 4);
         }
 
-        // Candles
+        // 2. Time Labels (X-Axis)
+        ctx.fillStyle = COLOR_TIME_TEXT;
+        ctx.textAlign = "center";
+        candles.forEach((c, i) => {
+            if (i % 10 === 0) { // Label every 10th candle
+                const x = i * candleWidth + candleWidth/2;
+                ctx.fillText(formatTime(c.time), x, canvas.height - 10);
+                
+                // Vertical grid lines
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height - paddingBottom);
+                ctx.stroke();
+            }
+        });
+        ctx.textAlign = "left";
+
+        // 3. Candles
         candles.forEach((c, i) => {
             const x = i * candleWidth;
             const yOpen = getY(c.open);
@@ -201,7 +242,7 @@
             ctx.fillRect(x + 2, Math.min(yOpen, yClose), candleWidth - 4, bodyHeight);
         });
 
-        // Moving Average
+        // 4. Moving Average
         ctx.strokeStyle = COLOR_YELLOW;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
@@ -213,7 +254,23 @@
             else ctx.lineTo(x, getY(avg/5));
         }
         ctx.stroke();
-        ctx.lineWidth = 1;
+
+        // 5. Current Price Line (Binance Style)
+        const lastCandle = candles[candles.length - 1];
+        const lastY = getY(lastCandle.close);
+        ctx.setLineDash([5, 5]);
+        ctx.strokeStyle = COLOR_TIME_TEXT;
+        ctx.beginPath();
+        ctx.moveTo(0, lastY);
+        ctx.lineTo(chartWidth, lastY);
+        ctx.stroke();
+        ctx.setLineDash([]); // Reset
+        
+        // Price Tag on the right
+        ctx.fillStyle = lastCandle.close >= lastCandle.open ? COLOR_GREEN : COLOR_RED;
+        ctx.fillRect(chartWidth, lastY - 10, 65, 20);
+        ctx.fillStyle = "white";
+        ctx.fillText(lastCandle.close.toFixed(1), chartWidth + 5, lastY + 4);
         
         requestAnimationFrame(draw);
     }
